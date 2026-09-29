@@ -115,17 +115,16 @@ def chat():
             for doc in search_results:
                 context += doc.page_content + "\n\n"
 
-        # 3. STRICT PROMPT: Enforcing boundaries to prevent hallucination
+        # 3. HYBRID PROMPT: Prioritize context, but allow general knowledge as a fallback
         if context:
             system_point = (
                 "You are a Nursing Study Assistant for Universidad de Manila.\n"
-                "Answer the user's question using ONLY the provided context below.\n"
-                "Do not combine unrelated concepts. Do not add any outside knowledge.\n"
-                "If the answer is not explicitly stated in the context, reply exactly with: 'This topic is not covered in the uploaded reviewer.'\n\n"
+                "First, try to answer the student's question using ONLY the provided Context.\n"
+                "If the Context does not contain the answer, you may use your general medical and nursing knowledge to answer the question, but briefly mention that this information is outside of the uploaded reviewer.\n\n"
                 f"Context:\n{context}"
             )
         else:
-            system_point = "You are a Nursing Study Assistant."
+            system_point = "You are a Nursing Study Assistant for Universidad de Manila. Please ask a question about nursing."
 
         url = "http://127.0.0.1:11434/api/generate"
         payload = {
@@ -133,7 +132,9 @@ def chat():
             "system": system_point,
             "prompt": user_message,
             "stream": False,
-            "options": {"temperature": 0.0},
+            "options": {
+                "temperature": 0.3  # Raised from 0.0 to allow a little creativity
+            },
         }
 
         headers = {"Content-Type": "application/json"}
