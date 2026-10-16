@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import json  # Added for parsing AI JSON response
 from flask import Flask, jsonify, request
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -154,7 +155,7 @@ def chat():
         return jsonify({"reply": f"Server Error: {str(e)}"}), 500
 
 
-# --- ENSURE THIS IS OUTSIDE AND ALIGNED TO THE LEFT ---
+# --- READINESS PREDICTION ENDPOINT ---
 @app.route("/api/predict-readiness", methods=["POST"])
 def predict_readiness():
     try:
@@ -251,6 +252,83 @@ def predict_readiness():
 
     except Exception as e:
         print(f"❌ Error generating prediction: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# --- DEAN'S ASSESSMENT EXTRACTION ENDPOINT ---
+@app.route("/api/extract-questions", methods=["POST"])
+def extract_questions():
+    try:
+        if "document" not in request.files:
+            return jsonify({"error": "No PDF provided"}), 400
+
+        file = request.files["document"]
+
+        # 1. Save uploaded PDF temporarily
+        temp_path = os.path.join(TRAINING_FOLDER, "temp_assessment.pdf")
+        file.save(temp_path)
+
+        # 2. Extract raw text using PyMuPDF
+        loader = PyMuPDFLoader(temp_path)
+        docs = loader.load()
+        raw_text = "\n".join([doc.page_content for doc in docs])
+
+        # Clean up temporary file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+        if not raw_text.strip():
+            return jsonify({"error": "Could not extract any text from the PDF."}), 400
+
+        # 3. Prompt Llama 3.2 to structure raw text into strict JSON
+        prompt = f"""
+        You are an expert data extractor. Parse the following raw text from a nursing exam PDF and extract all multiple-choice questions.
+        
+        You MUST categorize each question into one of these exact sections: "Academic Performance", "Self-Efficacy", "Initiative", or "Motivation".
+        Determine which option is correct based on standard nursing knowledge or markings in the text.
+
+        OUTPUT STRICTLY IN THIS JSON FORMAT:
+        {{
+          "questions": [
+            {{
+              "section": "Academic Performance",
+              "question_text": "Question text here?",
+              "options": [
+                {{"option_text": "Option A", "is_correct": false}},
+                {{"option_text": "Option B", "is_correct": true}},
+                {{"option_text": "Option C", "is_correct": false}},
+                {{"option_text": "Option D", "is_correct": false}}
+              ]
+            }}
+          ]
+        }}
+
+        Raw Text:
+        {raw_text}
+        """
+
+        url = "http://127.0.0.1:11434/api/generate"
+        payload = {
+            "model": "llama3.2",
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",  # Forces Ollama to return valid JSON
+            "options": {"temperature": 0.1},  # Low temperature for precise parsing
+        }
+
+        print("🤖 Analyzing PDF and extracting questions (this may take a moment)...")
+        response = requests.post(
+            url, json=payload, headers={"Content-Type": "application/json"}, timeout=120
+        )
+        res_data = response.json()
+
+        # Convert AI string output into Python dict
+        ai_output = json.loads(res_data.get("response", "{}"))
+
+        return jsonify(ai_output), 200
+
+    except Exception as e:
+        print(f"❌ Extraction Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
