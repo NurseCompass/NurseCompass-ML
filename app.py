@@ -263,72 +263,131 @@ def extract_questions():
             return jsonify({"error": "No PDF provided"}), 400
 
         file = request.files["document"]
-
-        # 1. Save uploaded PDF temporarily
         temp_path = os.path.join(TRAINING_FOLDER, "temp_assessment.pdf")
         file.save(temp_path)
 
-        # 2. Extract raw text using PyMuPDF
         loader = PyMuPDFLoader(temp_path)
         docs = loader.load()
-        raw_text = "\n".join([doc.page_content for doc in docs])
 
-        # Clean up temporary file
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        if not raw_text.strip():
-            return jsonify({"error": "Could not extract any text from the PDF."}), 400
+        # 1. Glue all pages together so questions aren't split by page breaks
+        full_text = "\n".join([doc.page_content for doc in docs])
+        full_text = full_text.replace("Choose one best answer for each question.", "")
 
-        # 3. Prompt Llama 3.2 to structure raw text into strict JSON
-        prompt = f"""
-        You are an expert data extractor. Parse the following raw text from a nursing exam PDF and extract all multiple-choice questions.
-        
-        You MUST categorize each question into one of these exact sections: "Academic Performance", "Self-Efficacy", "Initiative", or "Motivation".
-        Determine which option is correct based on standard nursing knowledge or markings in the text.
+        # 2. Chunk text cleanly by SECTION
+        chunks = []
+        current_chunk = ""
+        for line in full_text.split("\n"):
+            upper_line = line.upper()
+            if (
+                "SECTION 1" in upper_line
+                or "SECTION 2" in upper_line
+                or "SECTION 3" in upper_line
+                or "SECTION 4" in upper_line
+            ):
+                if current_chunk.strip():
+                    chunks.append(current_chunk)
+                current_chunk = line + "\n"
+            else:
+                current_chunk += line + "\n"
+        if current_chunk.strip():
+            chunks.append(current_chunk)
 
-        OUTPUT STRICTLY IN THIS JSON FORMAT:
-        {{
-          "questions": [
+        all_questions = []
+        print(
+            f"📄 Merged pages and split into {len(chunks)} clean sections for extraction."
+        )
+
+        for i, chunk_text in enumerate(chunks):
+            if not chunk_text.strip():
+                continue
+
+            upper_chunk = chunk_text.upper()
+            if "SELF-EFFICACY" in upper_chunk:
+                current_section = "Self-Efficacy"
+            elif "INITIATIVE" in upper_chunk:
+                current_section = "Initiative"
+            elif "MOTIVATION" in upper_chunk:
+                current_section = "Motivation"
+            else:
+                current_section = "Academic Performance"
+
+            print(f"⏳ Extracting {current_section} (Chunk {i+1} of {len(chunks)})...")
+
+            # 3. FIXED PROMPT: Uses '...' placeholders so Llama does not copy generic sentence templates
+            prompt = f"""
+            Extract ALL multiple-choice questions from the provided raw text.
+            
+            STRICT RULES:
+            - Do not copy generic template text. Extract actual questions and actual options from RAW TEXT TO PROCESS.
+            - "section" MUST be "{current_section}" for every question.
+            - "question_text" MUST be the actual question scenario text from the raw text (without the question number like '1.').
+            - "option_text" MUST be the actual option text (without 'A.', 'B.', 'C.', 'D.').
+            - "is_correct" MUST be true ONLY for the option matching the "Correct answer:" line in raw text.
+
+            EXPECTED JSON SCHEME:
             {{
-              "section": "Academic Performance",
-              "question_text": "Question text here?",
-              "options": [
-                {{"option_text": "Option A", "is_correct": false}},
-                {{"option_text": "Option B", "is_correct": true}},
-                {{"option_text": "Option C", "is_correct": false}},
-                {{"option_text": "Option D", "is_correct": false}}
+              "questions": [
+                {{
+                  "section": "{current_section}",
+                  "question_text": "...",
+                  "options": [
+                    {{"option_text": "...", "is_correct": false}},
+                    {{"option_text": "...", "is_correct": false}},
+                    {{"option_text": "...", "is_correct": false}},
+                    {{"option_text": "...", "is_correct": false}}
+                  ]
+                }}
               ]
             }}
-          ]
-        }}
 
-        Raw Text:
-        {raw_text}
-        """
+            RAW TEXT TO PROCESS:
+            {chunk_text}
+            """
 
-        url = "http://127.0.0.1:11434/api/generate"
-        payload = {
-            "model": "llama3.2",
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",  # Forces Ollama to return valid JSON
-            "options": {"temperature": 0.1},  # Low temperature for precise parsing
-        }
+            payload = {
+                "model": "llama3.2",
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.0, "num_predict": 4096, "num_ctx": 4096},
+            }
 
-        print("🤖 Analyzing PDF and extracting questions (this may take a moment)...")
-        response = requests.post(
-            url, json=payload, headers={"Content-Type": "application/json"}, timeout=120
-        )
-        res_data = response.json()
+            try:
+                response = requests.post(
+                    "http://127.0.0.1:11434/api/generate", json=payload, timeout=300
+                )
+                res_data = response.json()
 
-        # Convert AI string output into Python dict
-        ai_output = json.loads(res_data.get("response", "{}"))
+                raw_ai_text = res_data.get("response", "{}").strip()
+                if raw_ai_text.startswith("```json"):
+                    raw_ai_text = raw_ai_text[7:]
+                elif raw_ai_text.startswith("```"):
+                    raw_ai_text = raw_ai_text[3:]
+                if raw_ai_text.endswith("```"):
+                    raw_ai_text = raw_ai_text[:-3]
 
-        return jsonify(ai_output), 200
+                ai_output = json.loads(raw_ai_text.strip())
+                extracted_qs = ai_output.get("questions", [])
+                all_questions.extend(extracted_qs)
+
+                print(
+                    f"✅ Section {i+1} ({current_section}) Success: Extracted {len(extracted_qs)} questions."
+                )
+
+            except Exception as e:
+                print(f"⚠️ Section {i+1} Failed: {str(e)}. Skipping.")
+                continue
+
+        if not all_questions:
+            return jsonify({"error": "Failed to extract. AI returned empty data."}), 400
+
+        print(f"🎉 DONE! Total questions found: {len(all_questions)}")
+        return jsonify({"questions": all_questions}), 200
 
     except Exception as e:
-        print(f"❌ Extraction Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
