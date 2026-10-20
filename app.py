@@ -129,7 +129,7 @@ def chat():
 
         url = "http://127.0.0.1:11434/api/generate"
         payload = {
-            "model": "llama3.2",
+            "model": "phi3",
             "system": system_point,
             "prompt": user_message,
             "stream": False,
@@ -224,7 +224,7 @@ def predict_readiness():
         )
 
         url = "http://127.0.0.1:11434/api/generate"
-        payload = {"model": "llama3.2", "prompt": prompt, "stream": False}
+        payload = {"model": "phi3", "prompt": prompt, "stream": False}
 
         response = requests.post(
             url, json=payload, headers={"Content-Type": "application/json"}, timeout=120
@@ -255,7 +255,7 @@ def predict_readiness():
         return jsonify({"error": str(e)}), 500
 
 
-# --- DEAN'S ASSESSMENT EXTRACTION ENDPOINT ---
+# --- DEAN'S ASSESSMENT EXTRACTION ENDPOINT (FINAL PRE-PROCESSED PARSER) ---
 @app.route("/api/extract-questions", methods=["POST"])
 def extract_questions():
     try:
@@ -272,122 +272,149 @@ def extract_questions():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        # 1. Glue all pages together so questions aren't split by page breaks
         full_text = "\n".join([doc.page_content for doc in docs])
-        full_text = full_text.replace("Choose one best answer for each question.", "")
 
-        # 2. Chunk text cleanly by SECTION
-        chunks = []
-        current_chunk = ""
-        for line in full_text.split("\n"):
-            upper_line = line.upper()
-            if (
-                "SECTION 1" in upper_line
-                or "SECTION 2" in upper_line
-                or "SECTION 3" in upper_line
-                or "SECTION 4" in upper_line
-            ):
-                if current_chunk.strip():
-                    chunks.append(current_chunk)
-                current_chunk = line + "\n"
-            else:
-                current_chunk += line + "\n"
-        if current_chunk.strip():
-            chunks.append(current_chunk)
-
-        all_questions = []
-        print(
-            f"📄 Merged pages and split into {len(chunks)} clean sections for extraction."
+        # 🚨 PRE-PROCESSING: Clean up the messy PDF extraction 🚨
+        # 1. Un-glue "Correct answer" from the end of options. Forces it to a new line!
+        full_text = re.sub(
+            r"\s*(?:Correct\s*answer|Answer|Ans)[\s\.\:\-]*([A-E])(?:\b|\.|\-)",
+            r"\nCorrect answer: \1. ",
+            full_text,
+            flags=re.IGNORECASE,
         )
 
-        for i, chunk_text in enumerate(chunks):
-            if not chunk_text.strip():
+        # 2. Un-glue Question numbers that got merged with the previous sentence.
+        full_text = re.sub(
+            r"([a-z\.\:\;\"\'])\s+(?=(?:Q\s*)?([1-9]|[1-4][0-9])[\.\)\:\-]\s+[A-Z])",
+            r"\1\n",
+            full_text,
+        )
+
+        # 3. Un-glue Section Headers.
+        full_text = re.sub(
+            r"([A-Za-z\.\:\;])\s+(?=SECTION\s+\d+)",
+            r"\1\n",
+            full_text,
+            flags=re.IGNORECASE,
+        )
+
+        all_questions = []
+        current_section = "General Knowledge"
+        current_question_section = current_section
+
+        lines = full_text.split("\n")
+        current_question = None
+        current_options = []
+        current_state = None
+
+        for line in lines:
+            line_str = line.strip()
+            upper_line = line_str.upper()
+
+            if not line_str or "CHOOSE ONE BEST ANSWER" in upper_line:
                 continue
 
-            upper_chunk = chunk_text.upper()
-            if "SELF-EFFICACY" in upper_chunk:
-                current_section = "Self-Efficacy"
-            elif "INITIATIVE" in upper_chunk:
-                current_section = "Initiative"
-            elif "MOTIVATION" in upper_chunk:
-                current_section = "Motivation"
-            else:
-                current_section = "Academic Performance"
+            # 1. Strict Section Detection
+            if "SECTION" in upper_line:
+                if "ACADEMIC PERFORMANCE" in upper_line:
+                    current_section = "Academic Performance"
+                    continue
+                elif "SELF-EFFICACY" in upper_line:
+                    current_section = "Self-Efficacy"
+                    continue
+                elif "INITIATIVE" in upper_line:
+                    current_section = "Initiative"
+                    continue
+                elif "MOTIVATION" in upper_line:
+                    current_section = "Motivation"
+                    continue
 
-            print(f"⏳ Extracting {current_section} (Chunk {i+1} of {len(chunks)})...")
+            # 2. Question Detection
+            q_match = re.search(
+                r"^[\s\W]*?(?:Q|Question)?\s*?(\d+)[\.\)\:\-]\s*(.*)",
+                line_str,
+                re.IGNORECASE,
+            )
+            if q_match:
+                if current_question and current_options:
+                    if not any(opt.get("is_correct") for opt in current_options):
+                        current_options[0]["is_correct"] = True
 
-            # 3. FIXED PROMPT: Uses '...' placeholders so Llama does not copy generic sentence templates
-            prompt = f"""
-            Extract ALL multiple-choice questions from the provided raw text.
-            
-            STRICT RULES:
-            - Do not copy generic template text. Extract actual questions and actual options from RAW TEXT TO PROCESS.
-            - "section" MUST be "{current_section}" for every question.
-            - "question_text" MUST be the actual question scenario text from the raw text (without the question number like '1.').
-            - "option_text" MUST be the actual option text (without 'A.', 'B.', 'C.', 'D.').
-            - "is_correct" MUST be true ONLY for the option matching the "Correct answer:" line in raw text.
+                    all_questions.append(
+                        {
+                            "section": current_question_section,
+                            "question_text": current_question,
+                            "options": current_options,
+                        }
+                    )
 
-            EXPECTED JSON SCHEME:
-            {{
-              "questions": [
-                {{
-                  "section": "{current_section}",
-                  "question_text": "...",
-                  "options": [
-                    {{"option_text": "...", "is_correct": false}},
-                    {{"option_text": "...", "is_correct": false}},
-                    {{"option_text": "...", "is_correct": false}},
-                    {{"option_text": "...", "is_correct": false}}
-                  ]
-                }}
-              ]
-            }}
-
-            RAW TEXT TO PROCESS:
-            {chunk_text}
-            """
-
-            payload = {
-                "model": "llama3.2",
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.0, "num_predict": 4096, "num_ctx": 4096},
-            }
-
-            try:
-                response = requests.post(
-                    "http://127.0.0.1:11434/api/generate", json=payload, timeout=300
-                )
-                res_data = response.json()
-
-                raw_ai_text = res_data.get("response", "{}").strip()
-                if raw_ai_text.startswith("```json"):
-                    raw_ai_text = raw_ai_text[7:]
-                elif raw_ai_text.startswith("```"):
-                    raw_ai_text = raw_ai_text[3:]
-                if raw_ai_text.endswith("```"):
-                    raw_ai_text = raw_ai_text[:-3]
-
-                ai_output = json.loads(raw_ai_text.strip())
-                extracted_qs = ai_output.get("questions", [])
-                all_questions.extend(extracted_qs)
-
-                print(
-                    f"✅ Section {i+1} ({current_section}) Success: Extracted {len(extracted_qs)} questions."
-                )
-
-            except Exception as e:
-                print(f"⚠️ Section {i+1} Failed: {str(e)}. Skipping.")
+                current_question = q_match.group(2).strip()
+                current_question_section = current_section
+                current_options = []
+                current_state = "QUESTION"
                 continue
+
+            # 3. Option Detection (WITH STRICT 4-OPTION LIMIT)
+            opt_match = re.search(
+                r"^[\s\W]*?([A-E])[\.\)\:\-]\s*(.*)", line_str, re.IGNORECASE
+            )
+            if opt_match and current_question:
+                if len(current_options) >= 4:
+                    continue
+
+                opt_text = opt_match.group(2).strip()
+                current_options.append({"option_text": opt_text, "is_correct": False})
+                current_state = "OPTION"
+                continue
+
+            # 4. Standalone Answer Key Detection
+            ans_match = re.search(
+                r"^[\s\W]*?(?:Correct\s*answer|Answer|Ans)[\s\.\:\-]*([A-E])",
+                line_str,
+                re.IGNORECASE,
+            )
+            if ans_match and current_options:
+                correct_letter = ans_match.group(1).upper()
+                for idx, opt in enumerate(current_options):
+                    opt["is_correct"] = chr(65 + idx) == correct_letter
+
+                current_state = "EXPLANATION"
+                continue
+
+            # 5. Clean Text Wraparound Handling
+            if current_state == "QUESTION" and current_question:
+                current_question += " " + line_str
+            elif current_state == "OPTION" and current_options:
+                current_options[-1]["option_text"] += " " + line_str
+            elif current_state == "EXPLANATION":
+                pass  # Explicitly ignore any text here so it stays clean
+
+        # Append the very last question safely
+        if current_question and current_options:
+            if not any(opt.get("is_correct") for opt in current_options):
+                current_options[0]["is_correct"] = True
+
+            all_questions.append(
+                {
+                    "section": current_question_section,
+                    "question_text": current_question,
+                    "options": current_options,
+                }
+            )
 
         if not all_questions:
-            return jsonify({"error": "Failed to extract. AI returned empty data."}), 400
+            return (
+                jsonify({"error": "No questions could be parsed. Check PDF format."}),
+                400,
+            )
 
-        print(f"🎉 DONE! Total questions found: {len(all_questions)}")
+        print(
+            f"⚡ Ultimate Pre-Processed Parse Complete! Total questions found: {len(all_questions)}"
+        )
         return jsonify({"questions": all_questions}), 200
 
     except Exception as e:
+        print(f"❌ Error parsing PDF: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
