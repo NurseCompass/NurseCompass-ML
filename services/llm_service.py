@@ -6,17 +6,20 @@ import config
 def call_gemini(prompt):
     if not config.GEMINI_API_KEY:
         return None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={config.GEMINI_API_KEY}"
+    
+    # Updated to use the exact working model found by your sanity check
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={config.GEMINI_API_KEY}"
+    
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 800
+            "maxOutputTokens": 500
         }
     }
     headers = {"Content-Type": "application/json"}
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
             data = res.json()
             candidates = data.get("candidates", [])
@@ -24,12 +27,14 @@ def call_gemini(prompt):
                 parts = candidates[0].get("content", {}).get("parts", [])
                 if parts:
                     return parts[0].get("text", "")
+        else:
+            print(f"⚠️ Gemini API returned status {res.status_code}: {res.text}")
     except Exception as e:
         print(f"⚠️ Gemini API call failed: {e}")
     return None
 
 def call_ollama(prompt, system_prompt=""):
-    url = "http://127.0.0.1:11434/api/generate"
+    url = "https://swept-uncurled-darkroom.ngrok-free.dev/api/generate"
     payload = {
         "model": config.LLM_MODEL,
         "system": system_prompt,
@@ -39,7 +44,7 @@ def call_ollama(prompt, system_prompt=""):
     }
     headers = {"Content-Type": "application/json"}
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=300)
+        res = requests.post(url, json=payload, headers=headers, timeout=100)
         if res.status_code == 200:
             return res.json().get("response", "")
     except Exception as e:
@@ -47,32 +52,44 @@ def call_ollama(prompt, system_prompt=""):
     return None
 
 def generate_chat_reply(user_message, context=""):
-    # 1. STRICT GUARDRAIL: If no relevant context in study materials, refuse immediately
+    # 1. STRICT GUARDRAIL: If no relevant context, refuse immediately
     if not context or not context.strip():
         return "I am sorry, but no uploaded study materials were found regarding this topic. Please check your uploaded course reviewers or consult your clinical instructor."
 
-    # 2. Strict Context-Only Prompt
+    # 2. Simplified Prompt to stop Chain-of-Thought (Thinking out loud)
     prompt = (
-        f"You are NurseCompass AI Study Assistant for Universidad de Manila (UDM) College of Nursing.\n\n"
-        f"STRICT INSTRUCTIONS:\n"
-        f"1. Answer the student's question STRICTLY AND EXCLUSIVELY using the Study Material Context provided below.\n"
-        f"2. DO NOT use external medical knowledge, assumptions, or unprovided facts.\n"
-        f"3. If the provided context does NOT contain the complete answer, respond EXACTLY with:\n"
-        f"'I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor.'\n\n"
-        f"STUDY MATERIAL CONTEXT:\n{context}\n\n"
-        f"STUDENT QUESTION:\n{user_message}"
+        f"You are the NurseCompass AI Study Assistant.\n"
+        f"Read the Context below. Then answer the Student Question using ONLY the Context.\n"
+        f"If the answer cannot be found in the Context, you must reply EXACTLY with: 'I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor.'\n\n"
+        f"Context:\n{context}\n\n"
+        f"Student Question: {user_message}\n\n"
+        f"Final Answer:"
     )
 
     reply = call_gemini(prompt)
     if not reply:
         reply = call_ollama(prompt)
 
+    # 3. Bulletproof Failsafe Filters
+    fallback_phrase = "I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor."
+    
     if not reply or not reply.strip():
-        reply = "I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor."
+        return fallback_phrase
+
+    reply = reply.strip()
+    
+    # THE NUCLEAR FILTER: If the AI outputs its whole thought process but decides the answer isn't there, 
+    # this completely overrides the AI and forces ONLY the clean sentence to go to Laravel.
+    if "I am sorry, but that information is not available" in reply:
+        return fallback_phrase
+        
+    # Clean up any residual 'Final Answer:' text if the AI accidentally repeats our prompt trigger
+    reply = reply.replace("Final Answer:", "").strip()
 
     # HTML formatting for Blade template compatibility
     reply = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", reply)
     reply = reply.replace("\n", "<br>")
+    
     return reply
 
 def evaluate_student_readiness(score, total, category_scores, detailed_answers, year_level="4th Year"):

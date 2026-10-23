@@ -65,7 +65,7 @@ class RAGService:
             return
 
         print(f"📄 Loaded {len(docs)} pages. Splitting text...")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=60)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=250)
         chunks = text_splitter.split_documents(docs)
 
         print(f"✂️ Created {len(chunks)} text chunks. Indexing vector database...")
