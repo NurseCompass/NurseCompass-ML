@@ -10,12 +10,10 @@ try:
     from routes.prediction_routes import prediction_bp
     from routes.assessment_routes import assessment_bp
 
-    app.register_blueprint(chatbot_bp)
-    app.register_blueprint(prediction_bp)
-    app.register_blueprint(assessment_bp)
-    print("✅ All ML routes registered successfully!")
-except Exception as e:
-    print(f"❌ Error registering blueprints: {e}")
+app.register_blueprint(chatbot_bp)
+app.register_blueprint(prediction_bp)
+app.register_blueprint(assessment_bp)
+print("✅ All ML routes registered successfully!")
 
 @app.route("/")
 def home():
