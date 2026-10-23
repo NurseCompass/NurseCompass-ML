@@ -1,13 +1,11 @@
 import os
-import requests
 import config
+import pdfplumber
 
-# Safe LangChain Imports
-try:
-    from langchain_community.document_loaders import PDFPlumberLoader
-except ImportError:
-    from langchain.document_loaders import PDFPlumberLoader
+# Modern, stable import from the core package you installed
+from langchain_core.documents import Document
 
+# Safe fallbacks for the rest of your LangChain tools
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 except ImportError:
@@ -48,14 +46,22 @@ class RAGService:
             except Exception as e:
                 print(f"⚠️ Error loading Chroma DB: {e}. Re-indexing PDFs...")
 
-        print("📚 Scanning 'training_data' for study materials using PDFPlumberLoader...")
+        print("📚 Scanning 'training_data' for study materials using custom pdfplumber (layout=True)...")
         docs = []
         for filename in os.listdir(config.TRAINING_FOLDER):
             if filename.endswith(".pdf"):
                 file_path = os.path.join(config.TRAINING_FOLDER, filename)
                 try:
-                    loader = PDFPlumberLoader(file_path)
-                    docs.extend(loader.load())
+                    extracted_text = ""
+                    # layout=True preserves table columns so the AI can read them correctly
+                    with pdfplumber.open(file_path) as pdf:
+                        for page in pdf.pages:
+                            page_text = page.extract_text(layout=True)
+                            if page_text:
+                                extracted_text += page_text + "\n\n"
+                    
+                    if extracted_text:
+                        docs.append(Document(page_content=extracted_text, metadata={"source": filename}))
                 except Exception as e:
                     print(f"⚠️ Failed to load {filename}: {e}")
 
@@ -65,7 +71,9 @@ class RAGService:
             return
 
         print(f"📄 Loaded {len(docs)} pages. Splitting text...")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=250)
+        
+        # Keep chunk size at 1500 to ensure tables stay intact
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
         chunks = text_splitter.split_documents(docs)
 
         print(f"✂️ Created {len(chunks)} text chunks. Indexing vector database...")

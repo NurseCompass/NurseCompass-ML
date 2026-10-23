@@ -14,7 +14,7 @@ def chat():
             return jsonify({"reply": "Please enter a question to ask."}), 400
 
         # Search for matching study material chunks in ChromaDB
-        context = rag_service.get_context(user_message, k=15)
+        context = rag_service.get_context(user_message, k=6)
 
         # Generate 100% study-material-bound response
         reply = generate_chat_reply(user_message, context)

@@ -34,13 +34,17 @@ def call_gemini(prompt):
     return None
 
 def call_ollama(prompt, system_prompt=""):
+    # ⚠️ CRITICAL: Replace this with your laptop's Ngrok URL for TODAY
     url = "https://swept-uncurled-darkroom.ngrok-free.dev/api/generate"
     payload = {
         "model": config.LLM_MODEL,
         "system": system_prompt,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.1}
+        "options": {
+            "temperature": 0.1,
+            "num_ctx": 8192  # FORCES Ollama to read the entire PDF context without cutting it off
+        }
     }
     headers = {"Content-Type": "application/json"}
     try:
@@ -52,44 +56,41 @@ def call_ollama(prompt, system_prompt=""):
     return None
 
 def generate_chat_reply(user_message, context=""):
-    # 1. STRICT GUARDRAIL: If no relevant context, refuse immediately
-    if not context or not context.strip():
-        return "I am sorry, but no uploaded study materials were found regarding this topic. Please check your uploaded course reviewers or consult your clinical instructor."
+    fallback_phrase = "I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor."
 
-    # 2. Simplified Prompt to stop Chain-of-Thought (Thinking out loud)
+    if not context or not context.strip():
+        return fallback_phrase
+
+    # Single-word strict trigger prevents the AI from falsely tripping the failsafe
     prompt = (
         f"You are the NurseCompass AI Study Assistant.\n"
         f"Read the Context below. Then answer the Student Question using ONLY the Context.\n"
-        f"If the answer cannot be found in the Context, you must reply EXACTLY with: 'I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor.'\n\n"
+        f"If the answer is NOT in the Context, you must reply with exactly this single word: NOT_FOUND\n\n"
         f"Context:\n{context}\n\n"
         f"Student Question: {user_message}\n\n"
-        f"Final Answer:"
+        f"Answer:"
     )
 
     reply = call_gemini(prompt)
     if not reply:
         reply = call_ollama(prompt)
 
-    # 3. Bulletproof Failsafe Filters
-    fallback_phrase = "I am sorry, but that information is not available in the uploaded study materials. Please review your uploaded course reviewers or consult your clinical instructor."
-    
     if not reply or not reply.strip():
         return fallback_phrase
 
     reply = reply.strip()
-    
-    # THE NUCLEAR FILTER: If the AI outputs its whole thought process but decides the answer isn't there, 
-    # this completely overrides the AI and forces ONLY the clean sentence to go to Laravel.
-    if "I am sorry, but that information is not available" in reply:
+
+    # Clean residual markers
+    reply = reply.replace("Answer:", "").strip()
+
+    # Trigger fallback ONLY if the AI explicitly states it cannot find it
+    if "NOT_FOUND" in reply or "not available" in reply.lower():
         return fallback_phrase
-        
-    # Clean up any residual 'Final Answer:' text if the AI accidentally repeats our prompt trigger
-    reply = reply.replace("Final Answer:", "").strip()
 
     # HTML formatting for Blade template compatibility
     reply = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", reply)
     reply = reply.replace("\n", "<br>")
-    
+
     return reply
 
 def evaluate_student_readiness(score, total, category_scores, detailed_answers, year_level="4th Year"):

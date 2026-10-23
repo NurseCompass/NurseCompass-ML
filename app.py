@@ -4,11 +4,10 @@ import config
 
 app = Flask(__name__)
 
-# Register Blueprints safely
-try:
-    from routes.chatbot_routes import chatbot_bp
-    from routes.prediction_routes import prediction_bp
-    from routes.assessment_routes import assessment_bp
+    # Removed try-except trap so the server reveals any missing dependencies
+from routes.chatbot_routes import chatbot_bp
+from routes.prediction_routes import prediction_bp
+from routes.assessment_routes import assessment_bp
 
 app.register_blueprint(chatbot_bp)
 app.register_blueprint(prediction_bp)
