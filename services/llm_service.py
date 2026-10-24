@@ -7,7 +7,8 @@ def call_gemini(prompt):
     if not config.GEMINI_API_KEY:
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={config.GEMINI_API_KEY}"
+    # Updated to the correct robust endpoint for the Pro model
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={config.GEMINI_API_KEY}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -42,7 +43,7 @@ def call_ollama(prompt, system_prompt=""):
         "options": {
             "temperature": 0.1,
             "num_ctx": 8192,
-            "num_predict": 1000  # Gives the model enough room so it never cuts off mid-sentence
+            "num_predict": 1000
         }
     }
     headers = {"Content-Type": "application/json"}
@@ -62,7 +63,6 @@ def generate_chat_reply(user_message, context=""):
     if not context or not context.strip():
         return fallback_phrase
 
-    # By feeding this strictly into the Ollama system parameter, it natively shuts down the internal monologue
     system_instruction = (
         "You are the NurseCompass AI Study Assistant. "
         "You must answer the student's question using ONLY the provided Context. "
@@ -87,10 +87,6 @@ def generate_chat_reply(user_message, context=""):
     reply = reply.strip()
     reply = reply.replace("Answer:", "").strip()
 
-    # The brittle 'NOT_FOUND' Python trap has been permanently deleted.
-    # The AI will now naturally return the fallback phrase or the answer without being intercepted.
-
-    # HTML formatting for Blade template compatibility
     reply = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", reply)
     reply = reply.replace("\n", "<br>")
 

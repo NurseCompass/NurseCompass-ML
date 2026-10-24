@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from services.rag_service import rag_service
 from services.llm_service import generate_chat_reply
+import os
 
 chatbot_bp = Blueprint('chatbot', __name__)
 
@@ -9,15 +10,16 @@ def chat():
     try:
         data = request.get_json() or {}
         user_message = data.get("user_message", "")
+        
+        user_id = data.get("user_id", "unknown")
+        section_id = data.get("section_id", "none")
 
         if not user_message.strip():
             return jsonify({"reply": "Please enter a question to ask."}), 400
 
-        # Search for matching study material chunks in ChromaDB
-        context = rag_service.get_context(user_message, k=12)
-        print(f"🔍 RETRIEVED CONTEXT:\n{context}") # ADD THIS LINE
+        # Retrieve up to 12 chunks to ensure complete coverage
+        context = rag_service.get_context(user_message, user_id=user_id, section_id=section_id, k=12)
 
-        # Generate 100% study-material-bound response
         reply = generate_chat_reply(user_message, context)
 
         return jsonify({"reply": reply}), 200
@@ -34,15 +36,22 @@ def train_chatbot():
         file = request.files["document"]
         if file.filename == "":
             return jsonify({"error": "No selected file."}), 400
+            
+        owner_id = request.form.get("owner_id", "unknown")
+        section_id = request.form.get("section_id", "none")
 
+        os.makedirs("training_data", exist_ok=True)
         file_path = f"training_data/{file.filename}"
         file.save(file_path)
         print(f"📥 Saved study material: {file.filename}")
 
-        # Re-index RAG vector store
-        rag_service.initialize_rag()
+        success = rag_service.add_document(file_path, file.filename, owner_id, section_id)
 
-        return jsonify({"message": "Study material indexed successfully!"}), 200
+        if success:
+            return jsonify({"message": "Study material indexed successfully with privacy controls!"}), 200
+        else:
+            return jsonify({"error": "Failed to extract text or index the document."}), 500
+
     except Exception as e:
         print(f"❌ Error in /api/train-chatbot: {e}")
         return jsonify({"error": str(e)}), 500

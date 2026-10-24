@@ -1,11 +1,8 @@
 import os
 import config
 import pdfplumber
-
-# Modern, stable import from the core package you installed
 from langchain_core.documents import Document
 
-# Safe fallbacks for the rest of your LangChain tools
 try:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 except ImportError:
@@ -23,7 +20,6 @@ class RAGService:
     def __init__(self):
         self.vector_db = None
         try:
-            # Added base_url to route embeddings to your local laptop via ngrok
             self.embeddings = OllamaEmbeddings(
                 model=config.EMBEDDING_MODEL,
                 base_url="https://swept-uncurled-darkroom.ngrok-free.dev"
@@ -43,55 +39,54 @@ class RAGService:
                     embedding_function=self.embeddings
                 )
                 print("✅ RAG Pipeline Ready!")
-                return
             except Exception as e:
-                print(f"⚠️ Error loading Chroma DB: {e}. Re-indexing PDFs...")
+                print(f"⚠️ Error loading Chroma DB: {e}")
+        else:
+            print("⚠️ No existing ChromaDB found. Creating an empty vector store...")
+            self.vector_db = Chroma(
+                embedding_function=self.embeddings,
+                persist_directory=config.CHROMA_DB_DIR
+            )
 
-        print("📚 Scanning 'training_data' for study materials using custom pdfplumber (layout=True)...")
+    def add_document(self, file_path, filename, owner_id, section_id):
+        if self.vector_db is None:
+            self.initialize_rag()
+
+        print(f"📚 Scanning '{filename}' for study materials...")
         docs = []
-        for filename in os.listdir(config.TRAINING_FOLDER):
-            if filename.endswith(".pdf"):
-                file_path = os.path.join(config.TRAINING_FOLDER, filename)
-                try:
-                    extracted_text = ""
-                    # layout=True preserves table columns so the AI can read them correctly
-                    with pdfplumber.open(file_path) as pdf:
-                        for page in pdf.pages:
-                            page_text = page.extract_text(layout=True)
-                            if page_text:
-                                extracted_text += page_text + "\n\n"
-                    
-                    if extracted_text:
-                        docs.append(Document(page_content=extracted_text, metadata={"source": filename}))
-                except Exception as e:
-                    print(f"⚠️ Failed to load {filename}: {e}")
+        try:
+            extracted_text = ""
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text(layout=True)
+                    if page_text:
+                        extracted_text += page_text + "\n\n"
+            
+            if extracted_text:
+                metadata = {
+                    "source": filename,
+                    "owner_id": str(owner_id),
+                    "section_id": str(section_id)
+                }
+                docs.append(Document(page_content=extracted_text, metadata=metadata))
+        except Exception as e:
+            print(f"⚠️ Failed to load {filename}: {e}")
+            return False
 
         if not docs:
-            print("⚠️ No PDFs found in training_data directory.")
-            self.vector_db = None
-            return
+            print(f"⚠️ No text could be extracted from {filename}.")
+            return False
 
-        print(f"📄 Loaded {len(docs)} pages. Splitting text...")
-        
-        # Keep chunk size at 1500 to ensure tables stay intact
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=3500, chunk_overlap=500)
+        print(f"📄 Splitting text for {filename}...")
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
         chunks = text_splitter.split_documents(docs)
 
-        print(f"✂️ Created {len(chunks)} text chunks. Indexing vector database...")
-        batch_size = 50
-        self.vector_db = Chroma.from_documents(
-            documents=chunks[:batch_size],
-            embedding=self.embeddings,
-            persist_directory=config.CHROMA_DB_DIR
-        )
+        print(f"✂️ Indexing {len(chunks)} chunks into vector database with privacy controls...")
+        self.vector_db.add_documents(chunks)
+        print(f"✅ Successfully indexed {filename} [Owner: {owner_id} | Section: {section_id}]")
+        return True
 
-        for i in range(batch_size, len(chunks), batch_size):
-            batch = chunks[i : i + batch_size]
-            self.vector_db.add_documents(batch)
-
-        print("✅ RAG Pipeline successfully indexed study materials!")
-
-    def get_context(self, query, k=6):
+    def get_context(self, query, user_id="unknown", section_id="none", k=12):
         if self.vector_db is None:
             self.initialize_rag()
 
@@ -99,8 +94,46 @@ class RAGService:
             return ""
 
         try:
-            results = self.vector_db.similarity_search(query, k=k)
-            context_text = "\n\n".join([doc.page_content for doc in results])
+            # 1. Pull a massive net of 60 chunks to ensure we don't miss the answer
+            results = self.vector_db.similarity_search(query, k=60)
+            
+            valid_chunks = []
+            
+            # 2. Aggressively clean the user's sections (lowercase, remove all spaces)
+            raw_user_sections = str(section_id).split(",")
+            user_sections = [s.strip().lower().replace(" ", "") for s in raw_user_sections if s.strip()]
+            
+            print(f"\n🔍 --- RAG PRIVACY FILTER DEBUG ---")
+            print(f"👤 Asking User ID: {user_id} | Allowed Sections: {user_sections}")
+
+            for doc in results:
+                doc_owner = str(doc.metadata.get("owner_id", "unknown"))
+                doc_sections_str = str(doc.metadata.get("section_id", "none"))
+                
+                # Clean the document's metadata exactly the same way
+                doc_sections = [s.strip().lower().replace(" ", "") for s in doc_sections_str.split(",") if s.strip()]
+
+                is_allowed = False
+                
+                # Check Ownership
+                if doc_owner == str(user_id):
+                    is_allowed = True
+                else:
+                    # Check Section Match
+                    for sec in user_sections:
+                        if sec != 'none' and sec in doc_sections:
+                            is_allowed = True
+                            break
+                
+                if is_allowed:
+                    valid_chunks.append(doc)
+                    if len(valid_chunks) >= k:
+                        break
+            
+            print(f"✅ Context Assembly Complete: Kept {len(valid_chunks)} authorized chunks.")
+            print(f"----------------------------------\n")
+
+            context_text = "\n\n".join([doc.page_content for doc in valid_chunks])
             return context_text.strip()
         except Exception as e:
             print(f"❌ Error performing similarity search: {e}")
