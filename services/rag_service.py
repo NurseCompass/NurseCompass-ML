@@ -16,17 +16,18 @@ try:
 except ImportError:
     from langchain.vectorstores import Chroma
 
-try:
-    from langchain_community.embeddings import OllamaEmbeddings
-except ImportError:
-    from langchain.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 
 class RAGService:
     def __init__(self):
         self.vector_db = None
         try:
-            self.embeddings = OllamaEmbeddings(model=config.EMBEDDING_MODEL)
+            # Added base_url to route embeddings to your local laptop via ngrok
+            self.embeddings = OllamaEmbeddings(
+                model=config.EMBEDDING_MODEL,
+                base_url="https://swept-uncurled-darkroom.ngrok-free.dev"
+            )
             self.initialize_rag()
         except Exception as e:
             print(f"⚠️ Embeddings initialization deferred: {e}")
@@ -73,7 +74,7 @@ class RAGService:
         print(f"📄 Loaded {len(docs)} pages. Splitting text...")
         
         # Keep chunk size at 1500 to ensure tables stay intact
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=3500, chunk_overlap=500)
         chunks = text_splitter.split_documents(docs)
 
         print(f"✂️ Created {len(chunks)} text chunks. Indexing vector database...")

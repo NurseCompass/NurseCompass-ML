@@ -7,14 +7,13 @@ def call_gemini(prompt):
     if not config.GEMINI_API_KEY:
         return None
     
-    # Updated to use the exact working model found by your sanity check
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key={config.GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={config.GEMINI_API_KEY}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 500
+            "maxOutputTokens": 1000
         }
     }
     headers = {"Content-Type": "application/json"}
@@ -34,7 +33,6 @@ def call_gemini(prompt):
     return None
 
 def call_ollama(prompt, system_prompt=""):
-    # ⚠️ CRITICAL: Replace this with your laptop's Ngrok URL for TODAY
     url = "https://swept-uncurled-darkroom.ngrok-free.dev/api/generate"
     payload = {
         "model": config.LLM_MODEL,
@@ -43,7 +41,8 @@ def call_ollama(prompt, system_prompt=""):
         "stream": False,
         "options": {
             "temperature": 0.1,
-            "num_ctx": 8192  # FORCES Ollama to read the entire PDF context without cutting it off
+            "num_ctx": 8192,
+            "num_predict": 1000  # Gives the model enough room so it never cuts off mid-sentence
         }
     }
     headers = {"Content-Type": "application/json"}
@@ -51,6 +50,8 @@ def call_ollama(prompt, system_prompt=""):
         res = requests.post(url, json=payload, headers=headers, timeout=100)
         if res.status_code == 200:
             return res.json().get("response", "")
+        else:
+            print(f"⚠️ Ollama API Error {res.status_code}: {res.text}")
     except Exception as e:
         print(f"❌ Ollama call failed: {e}")
     return None
@@ -61,31 +62,33 @@ def generate_chat_reply(user_message, context=""):
     if not context or not context.strip():
         return fallback_phrase
 
-    # Single-word strict trigger prevents the AI from falsely tripping the failsafe
-    prompt = (
-        f"You are the NurseCompass AI Study Assistant.\n"
-        f"Read the Context below. Then answer the Student Question using ONLY the Context.\n"
-        f"If the answer is NOT in the Context, you must reply with exactly this single word: NOT_FOUND\n\n"
-        f"Context:\n{context}\n\n"
-        f"Student Question: {user_message}\n\n"
-        f"Answer:"
+    # By feeding this strictly into the Ollama system parameter, it natively shuts down the internal monologue
+    system_instruction = (
+        "You are the NurseCompass AI Study Assistant. "
+        "You must answer the student's question using ONLY the provided Context. "
+        "DO NOT include internal thoughts, steps, drafts, or bullet points. Output ONLY the final answer. "
+        "Avoid using em dashes in your response. "
+        f"If the answer is NOT in the Context, reply EXACTLY with this phrase and nothing else: {fallback_phrase}"
     )
 
-    reply = call_gemini(prompt)
+    user_prompt = f"Context:\n{context}\n\nStudent Question: {user_message}\n\nAnswer:"
+
+    combined_gemini_prompt = f"{system_instruction}\n\n{user_prompt}"
+    reply = call_gemini(combined_gemini_prompt)
+    
     if not reply:
-        reply = call_ollama(prompt)
+        reply = call_ollama(prompt=user_prompt, system_prompt=system_instruction)
+
+    print(f"🤖 RAW AI REPLY: {reply}")
 
     if not reply or not reply.strip():
         return fallback_phrase
 
     reply = reply.strip()
-
-    # Clean residual markers
     reply = reply.replace("Answer:", "").strip()
 
-    # Trigger fallback ONLY if the AI explicitly states it cannot find it
-    if "NOT_FOUND" in reply or "not available" in reply.lower():
-        return fallback_phrase
+    # The brittle 'NOT_FOUND' Python trap has been permanently deleted.
+    # The AI will now naturally return the fallback phrase or the answer without being intercepted.
 
     # HTML formatting for Blade template compatibility
     reply = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", reply)
