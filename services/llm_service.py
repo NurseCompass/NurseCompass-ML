@@ -3,12 +3,14 @@ import json
 import re
 import config
 
+http_session = requests.Session()
+
 def call_gemini(prompt):
     if not config.GEMINI_API_KEY:
         return None
     
     # Updated to the correct robust endpoint for the Pro model
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={config.GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={config.GEMINI_API_KEY}"
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -19,7 +21,7 @@ def call_gemini(prompt):
     }
     headers = {"Content-Type": "application/json"}
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=15)
+        res = requests.post(url, json=payload, headers=headers, timeout=60)
         if res.status_code == 200:
             data = res.json()
             candidates = data.get("candidates", [])
