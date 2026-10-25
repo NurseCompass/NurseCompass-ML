@@ -28,24 +28,39 @@ class RAGService:
         except Exception as e:
             print(f"⚠️ Embeddings initialization deferred: {e}")
 
-    def initialize_rag(self):
-        os.makedirs(config.TRAINING_FOLDER, exist_ok=True)
+    def get_absolute_path(self, path_name):
+        """Helper to guarantee an absolute path based on the project root."""
+        if os.path.isabs(path_name):
+            return path_name
+        # Resolves to the NurseCompass-ML root directory (one level up from /services)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, path_name)
 
-        if os.path.exists(config.CHROMA_DB_DIR) and os.listdir(config.CHROMA_DB_DIR):
-            print("⚡ Loading existing study materials from vector database...")
+    def initialize_rag(self):
+        # 1. Force absolute paths for storage
+        training_dir = self.get_absolute_path(config.TRAINING_FOLDER)
+        chroma_dir = self.get_absolute_path(config.CHROMA_DB_DIR)
+
+        # 2. Explicitly create directories BEFORE SQLite tries to open them
+        os.makedirs(training_dir, exist_ok=True)
+        os.makedirs(chroma_dir, exist_ok=True)
+
+        # 3. Initialize Chroma with absolute path
+        if os.listdir(chroma_dir):
+            print(f"⚡ Loading existing study materials from {chroma_dir}...")
             try:
                 self.vector_db = Chroma(
-                    persist_directory=config.CHROMA_DB_DIR,
+                    persist_directory=chroma_dir,
                     embedding_function=self.embeddings
                 )
                 print("✅ RAG Pipeline Ready!")
             except Exception as e:
                 print(f"⚠️ Error loading Chroma DB: {e}")
         else:
-            print("⚠️ No existing ChromaDB found. Creating an empty vector store...")
+            print(f"⚠️ No existing ChromaDB found. Creating an empty vector store at {chroma_dir}...")
             self.vector_db = Chroma(
                 embedding_function=self.embeddings,
-                persist_directory=config.CHROMA_DB_DIR
+                persist_directory=chroma_dir
             )
 
     def add_document(self, file_path, filename, owner_id, section_id):

@@ -64,12 +64,16 @@ def generate_chat_reply(user_message, context=""):
         return fallback_phrase
 
     system_instruction = (
-        "You are the NurseCompass AI Study Assistant. "
-        "You must answer the student's question using ONLY the provided Context. "
-        "DO NOT include internal thoughts, steps, drafts, or bullet points. Output ONLY the final answer. "
-        "Avoid using em dashes in your response. "
-        f"If the answer is NOT in the Context, reply EXACTLY with this phrase and nothing else: {fallback_phrase}"
-    )
+    "You are the NurseCompass AI, a friendly and helpful nursing tutor. "
+    "You must answer the student's question using ONLY the provided Context. "
+    "STRUCTURE YOUR RESPONSE EXACTLY LIKE THIS: "
+    "1. Give the direct answer in a conversational tone. "
+    "2. Add exactly one or two sentences explaining what it means or why it matters based on the context. "
+    "Your total response must be exactly 2 to 3 sentences. Do not write long paragraphs. "
+    "DO NOT include internal thoughts, reasoning steps, drafts, or bullet points. "
+    "Avoid using em dashes in your response. "
+    f"If the answer is NOT in the Context, reply EXACTLY with this phrase and nothing else: {fallback_phrase}"
+)
 
     user_prompt = f"Context:\n{context}\n\nStudent Question: {user_message}\n\nAnswer:"
 
