@@ -1,10 +1,20 @@
 import os
 from flask import Flask, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import config
 
 app = Flask(__name__)
 
-    # Removed try-except trap so the server reveals any missing dependencies
+# Initialize Flask-Limiter to protect heavy AI routes from spam/DoS
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
+
+# Removed try-except trap so the server reveals any missing dependencies
 from routes.chatbot_routes import chatbot_bp
 from routes.prediction_routes import prediction_bp
 from routes.assessment_routes import assessment_bp
