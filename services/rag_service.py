@@ -102,6 +102,46 @@ class RAGService:
         self.vector_db.add_documents(chunks)
         print(f"✅ Successfully indexed {filename} [Owner: {owner_id} | Section: {section_id}]")
         return True
+    
+    def delete_document(self, filename):
+        """Removes all chunks associated with a specific filename from ChromaDB."""
+        if self.vector_db is None:
+            self.initialize_rag()
+            
+        if self.vector_db is None:
+            print("⚠️ Cannot delete: Vector DB not initialized.")
+            return False
+
+        try:
+            # ChromaDB requires the actual IDs to delete items.
+            # We first search for all items matching the metadata.
+            print(f"🗑️ Searching for embeddings linked to {filename} to delete...")
+            
+            # Note: The way to get all matching items varies slightly by Chroma version. 
+            # We access the underlying collection to get and delete by metadata.
+            collection = self.vector_db._collection
+            results = collection.get(where={"source": filename})
+            
+            ids_to_delete = results.get("ids", [])
+            
+            if not ids_to_delete:
+                print(f"⚠️ No embeddings found in ChromaDB for {filename}.")
+                return True # Technically a success if it's already gone
+                
+            collection.delete(ids=ids_to_delete)
+            print(f"✅ Successfully deleted {len(ids_to_delete)} chunks for {filename} from ChromaDB.")
+            
+            # Optional: Remove the physical file if it exists in training_data
+            file_path = self.get_absolute_path(os.path.join(config.TRAINING_FOLDER, filename))
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"🗑️ Deleted physical file {file_path}")
+                
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error deleting document from ChromaDB: {e}")
+            return False
 
     def get_context(self, query, user_id="unknown", section_id="none", k=4):
         if self.vector_db is None:

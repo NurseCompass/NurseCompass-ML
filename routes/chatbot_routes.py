@@ -55,3 +55,23 @@ def train_chatbot():
     except Exception as e:
         print(f"❌ Error in /api/train-chatbot: {e}")
         return jsonify({"error": str(e)}), 500
+    
+@chatbot_bp.route("/api/delete-document", methods=["POST"])
+def delete_document():
+    try:
+        data = request.get_json()
+        filename = data.get("filename")
+        
+        if not filename:
+            return jsonify({"error": "Filename is required"}), 400
+            
+        success = rag_service.delete_document(filename)
+        
+        if success:
+            return jsonify({"message": f"Document {filename} successfully purged from vector database."}), 200
+        else:
+            return jsonify({"error": "Failed to delete document from vector database."}), 500
+            
+    except Exception as e:
+        print(f"❌ Error in /api/delete-document: {e}")
+        return jsonify({"error": str(e)}), 500
