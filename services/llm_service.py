@@ -80,12 +80,18 @@ def generate_chat_reply(user_message, context=""):
     user_prompt = f"Context:\n{context}\n\nStudent Question: {user_message}\n\nAnswer:"
 
     combined_gemini_prompt = f"{system_instruction}\n\n{user_prompt}"
-    reply = call_gemini(combined_gemini_prompt)
     
+    # 1. Try Gemini first
+    reply = call_gemini(combined_gemini_prompt)
+    active_model = "GEMINI (3.6-flash)"
+    
+    # 2. If Gemini fails (like the 503 error), fall back to Ollama
     if not reply:
         reply = call_ollama(prompt=user_prompt, system_prompt=system_instruction)
+        active_model = f"OLLAMA ({config.LLM_MODEL})"
 
-    print(f"🤖 RAW AI REPLY: {reply}")
+    # 3. Print the name of the model that successfully replied
+    print(f"🤖 RAW AI REPLY [{active_model}]: {reply}")
 
     if not reply or not reply.strip():
         return fallback_phrase

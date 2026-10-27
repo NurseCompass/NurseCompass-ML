@@ -31,10 +31,12 @@ class RAGService:
     def get_absolute_path(self, path_name):
         """Helper to guarantee an absolute path based on the project root."""
         if os.path.isabs(path_name):
-            return path_name
+            return os.path.normpath(path_name)
         # Resolves to the NurseCompass-ML root directory (one level up from /services)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(base_dir, path_name)
+        
+        # os.path.normpath strictly formats the path and removes the illegal "./" characters for SQLite
+        return os.path.normpath(os.path.join(base_dir, path_name))
 
     def initialize_rag(self):
         # 1. Force absolute paths for storage
@@ -64,8 +66,8 @@ class RAGService:
             )
 
     def add_document(self, file_path, filename, owner_id, section_id):
-        if self.vector_db is None:
-            self.initialize_rag()
+        # Force a fresh thread-safe initialization on every upload to bypass SQLite locking
+        self.initialize_rag()
 
         print(f"📚 Scanning '{filename}' for study materials...")
         docs = []
@@ -101,7 +103,7 @@ class RAGService:
         print(f"✅ Successfully indexed {filename} [Owner: {owner_id} | Section: {section_id}]")
         return True
 
-    def get_context(self, query, user_id="unknown", section_id="none", k=12):
+    def get_context(self, query, user_id="unknown", section_id="none", k=4):
         if self.vector_db is None:
             self.initialize_rag()
 
